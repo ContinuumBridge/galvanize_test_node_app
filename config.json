@@ -1,7 +1,7 @@
 {
     "exe": "galvanize_node.py", 
     "name": "Galvanize Node", 
-    "url": "https://github.com/ContinuumBridge/galvanize_node/archive/v0.1.0.tar.gz", 
+    "url": "https://github.com/ContinuumBridge/galvanize_test_node_app/archive/v0.1.0.tar.gz", 
     "app_resource": "/api/bridge/v1/app/35", 
     "version": "0.1.0", 
     "provider": "ContinuumBridge", 

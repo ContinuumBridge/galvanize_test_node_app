@@ -13,7 +13,7 @@ from cbconfig import *
 from twisted.internet import reactor
 
 ALERTS = {
-    "pressed": struct.pack(">H" 0x0000),
+    "pressed": struct.pack(">H", 0x0000),
     "user_cleared": struct.pack(">H", 0x0100),
     "service_cleared": struct.pack(">H", 0x0200)
 }
@@ -77,17 +77,23 @@ class Galvanize():
         }
         self.currentDisplay = "m1"
         self.nodeState = "initial"
+        self.bridgeAddress = None
         self.lprsID = None
         self.userClearable = True
 
     def setDisplay(self, index):
+        text = self.displayMessage[index][0]
+        if self.numberLines[index] == 1:
+            text += "\n" + self.displayMessage[index][1]
+        if self.numberLines[index] == 2:
+            text += "\n" + self.displayMessage[index][2]
         msg = {
             "id": self.id,
             "status": "user_message",
-            "body": self.displayMessage[index]
+            "body": text
         }
         self.sendManagerMessage(msg)
-        self.cbLog("info", "Display: " + self.displayMessage[index] + ", font: " + self.displayFonts[index])
+        self.cbLog("info", "Display: " + text + ", font: " + self.displayFonts[index])
 
     def onButtonPress(self, buttonState, timeStamp):
         if buttonState == 1:
@@ -133,7 +139,7 @@ class Galvanize():
             self.setDisplay("m1")
 
     def sendBattery(self):
-        self.sendRadio("battery_status", struct.pack(">H" 100))
+        self.sendRadio("battery_status", struct.pack(">H", 100))
 
     def onConfig(self, data):
         configiType = struct.unpack("B", data[0])
@@ -187,16 +193,19 @@ class Galvanize():
         else:
             self.cbLog ("info", "Unrecognised config type: " + str(configType))
 
-    def onRadioMessage(function, data):
+    def onRadioMessage(self,source, function, data):
         if function == "beacon":
             if self.nodeState == "search":
+                self.bridgeAddress = source 
                 self.nodeState = "include_req"
+                self.sendRadio("include_req")
                 self.setDisplay("connecting")
         elif function == "include_grant":
             self.nodeState = "normal"
             self.sendRadio("ack")
         elif function == "config":
             self.onConfig(data)
+            self.sendRadio("ack")
         elif function == "send_battery":
             self.sendBattery
         elif function == "reinclude":
@@ -215,6 +224,7 @@ class Galvanize():
             "id": self.id,
             "request": "command",
             "data": {
+                "destination": self.bridgeAddress,
                 "function": function,
                 "data": data
             }
@@ -268,13 +278,14 @@ class App(CbApp):
     def onAdaptorData(self, message):
         #self.cbLog("debug", "onAdaptorData, message: " + str(message))
         if message["characteristic"] == "galvanize_button":
-            self.galvanize.onRadioMessage(message["data"]["function"], message["data"]["data"])
+            self.galvanize.onRadioMessage(message["data"]["source"], message["data"]["function"], message["data"]["data"])
         if message["characteristic"] == "buttons":
             self.galvanize.onButtonPress(message["data"]["leftButton"], message["timeStamp"])
 
     def onConfigureMessage(self, managerConfig):
         self.galvanize = Galvanize()
         self.galvanize.cbLog = self.cbLog
+        self.galvanize.id = self.id
         self.galvanize.sendManagerMessage = self.sendManagerMessage
         self.setState("starting")
 
