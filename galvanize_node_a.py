@@ -23,7 +23,6 @@ FUNCTIONS = {
     "ack": 0xAC,
     "include_req": 0x00,
     "include_grant": 0x02,
-    "reinclude": 0x04,
     "config": 0x05,
     "send_battery": 0x07,
     "alert": 0xAE,
@@ -67,12 +66,10 @@ class Galvanize():
             "m2": ["Your request has been sent", "", ""],
             "m3": ["Cancelling request", "", ""],
             "m4": ["", "", ""],
-            "initial": ["Press button for", "10 seconds to connect", "to network"],
+            "initial": ["Press button for", "3 seconds to connect", "to network"],
             "search": ["Searching for network", "", ""],
             "search_failed": ["No network found", "Press to continue", ""],
             "connecting": ["Trying to connect to network", "Please wait", ""],
-            "successfulConntect": ["Network connection successful", "", ""],
-            "failedConnect": ["Network connection failed", "", ""],
             "commsProblem": ["Communication problem", "Temporarily not in use", ""],
             "commsFailed": ["Communication problem", "Button not in use", ""]
         }
@@ -85,8 +82,6 @@ class Galvanize():
             "search": "medium",
             "search_failed": "medium",
             "connecting": "medium",
-            "successfulConntect": "medium",
-            "failedConnect": "medium",
             "commsProblem": "medium",
             "commsFailed": "medium"
         }
@@ -99,8 +94,6 @@ class Galvanize():
             "search": 1,
             "search_failed": 2,
             "connecting": 2,
-            "successfulConntect": 1,
-            "failedConnect": 1,
             "commsProblem": 2,
             "commsFailed": 2
         }
