@@ -53,7 +53,7 @@ INTERVALS = {
     "tr1": 360,
     "tr2": 3600,
     "t_long_press": 3,
-    "t_reset_press": 5,
+    "t_reset_press": 8,
     "t_start_press": 3,
     "t_search_max": 30,
     "t_keep_awake": 5
@@ -164,6 +164,7 @@ class Galvanize():
                 pass
             else:
                 self.cbLog("warning", "State machine in unknown state: " + self.nodeState)
+        self.cbLog("debug", "onButtonPress, end state: " + self.nodeState)
 
     def endRevert(self):
         if self.nodeState != "normal":
@@ -227,7 +228,7 @@ class Galvanize():
             display = DISPLAY_INDEX[struct.unpack("B", data[1])]
             self.setDisplay(display)
         else:
-            self.cbLog ("info", "Unrecognised config type: " + str(configType))
+            self.cbLog ("info", "Unrecognised config type: " + str(hex(configType)))
 
     def wakeup(self, disconnected=False):
         try:
@@ -237,7 +238,7 @@ class Galvanize():
         self.sendRadio("woken_up")
 
     def goToSleep(self):
-        self.radioOn = false
+        self.radioOn = False
         self.cbLog("debug", "radio off")
 
     def setWakeup(self, wakeup):
@@ -257,60 +258,59 @@ class Galvanize():
         self.nodeState = "search"
         self.wakeupID = reactor.callLater(INTERVALS["tr2"], self.reconnect)
 
-    def decodeRadioMessage(self, message):
-        destination = struct.unpack(">H", message[0:2])[0]
-        self.cbLog, "debug", "Rx: destination: " + str("{0:#0{1}X}".format(destination,6))
-        if destination == self.nodeAddress or destination == BEACON_ADDRESS or destination == GRANT_ADDRESS:
-            source, function, length = struct.unpack(">HBB", message[2:6])
-            #hexMessage = message.encode("hex")
-            #self.cbLog("debug", "hex message after decode: " + str(hexMessage))
-            #reactor.callFromThread(self.cbLog, "debug", "source: " + str("{0:#0{1}X}".format(source,6)))
-            self.cbLog, "debug", "Rx: function: " + str("{0:#0{1}X}".format(function,4))
-            self.cbLog, "debug", "Rx: length: " + str(length)
-            if length > 6:
-                wakeup = struct.unpack(">H", message[5:7])[0]
-                #reactor.callFromThread(self.cbLog, "debug", "wakeup: " + str(wakeup))
-            else:
-                wakeup = 0
-            if length > 8:
-                payload = message[8:]
-            else:
-                payload = ""
-            hexPayload = payload.encode("hex")
-            self.cbLog, "debug", "Rx: payload: " + str(hexPayload) + ", length: " + str(len(payload))
-            f = (key for key,value in FUNCTIONS.items() if value==function).next()
-            self.onRadioMessage(source, function, wakeup, payload)
-
-    def onRadioMessage(self,source, function, wakeup, data):
-        if self.starting:
-            self.setDisplay("initial")
-            self.starting = False
+    def onRadioMessage(self, message):
+        #if self.starting:
+        #    self.setDisplay("initial")
+        #    self.starting = False
         if self.radioOn:
-            if function == "beacon":
-                if self.nodeState == "search":
-                    self.bridgeAddress = source 
-                    self.nodeState = "include_req"
-                    self.sendRadio("include_req", struct.pack("I", NODE_ID))
-                    self.setDisplay("connecting")
-            elif function == "include_grant":
-                self.nodeState = "normal"
-                self.setDisplay("m1")
-                self.sendRadio("ack")
-                self.onIncludeGrant(data)
-                self.acknowledged()
-            elif function == "config":
-                self.onConfig(data)
-                self.sendRadio("ack")
-                self.acknowledged()
-            elif function == "send_battery":
-                self.sendBattery
-            elif function == "ack":
-                self.acknowledged()
-            else:
-                self.cbLog ("info", "Unrecognised radio function: " + function)
-            if function != "beacon":
-                self.setWakeup(wakeup)
-
+            self.cbLog("debug", "decodeRadioMessage: " + str(message))
+            destination = struct.unpack(">H", message[0:2])[0]
+            self.cbLog("debug", "Rx: destination: " + str("{0:#0{1}X}".format(destination,6)))
+            if destination == self.nodeAddress or destination == BEACON_ADDRESS or destination == GRANT_ADDRESS:
+                source, hexFunction, length = struct.unpack(">HBB", message[2:6])
+                function = (key for key,value in FUNCTIONS.items() if value==hexFunction).next()
+                #hexMessage = message.encode("hex")
+                #self.cbLog("debug", "hex message after decode: " + str(hexMessage))
+                self.cbLog("debug", "source: " + str("{0:#0{1}X}".format(source,6)))
+                self.cbLog("debug", "Rx: function: " + function)
+                self.cbLog("debug", "Rx: length: " + str(length))
+                if length > 6:
+                    wakeup = struct.unpack(">H", message[5:7])[0]
+                    #reactor.callFromThread(self.cbLog, "debug", "wakeup: " + str(wakeup))
+                else:
+                    wakeup = 0
+                if length > 8:
+                    payload = message[8:]
+                else:
+                    payload = ""
+                hexPayload = payload.encode("hex")
+                self.cbLog("debug", "Rx: payload: " + str(hexPayload) + ", length: " + str(len(payload)))
+    
+                if function == "beacon":
+                    if self.nodeState == "search":
+                        self.bridgeAddress = source 
+                        self.nodeState = "include_req"
+                        self.sendRadio("include_req", struct.pack("I", NODE_ID))
+                        self.setDisplay("connecting")
+                elif function == "include_grant":
+                    self.nodeState = "normal"
+                    self.setDisplay("m1")
+                    self.sendRadio("ack")
+                    self.onIncludeGrant(payload)
+                    self.acknowledged()
+                elif function == "config":
+                    self.onConfig(payload)
+                    self.sendRadio("ack")
+                    self.acknowledged()
+                elif function == "send_battery":
+                    self.sendBattery
+                elif function == "ack":
+                    self.acknowledged()
+                else:
+                    self.cbLog ("info", "Unrecognised radio function: " + str(function))
+                if function != "beacon":
+                    self.setWakeup(wakeup)
+    
     def searchTimeout(self):
         if self.nodeState == "search":
             self.nodeState = "search_failed"
@@ -329,7 +329,7 @@ class Galvanize():
             m = ""
             m += struct.pack(">H", self.bridgeAddress)
             m += struct.pack(">H", self.nodeAddress)
-            m+= struct.pack("B", FUNCTIONS[data["function"]])
+            m+= struct.pack("B", FUNCTIONS[function])
             m+= struct.pack("B", length)
             #self.cbLog("debug", "length: " +  str(length))
             if data:
@@ -341,7 +341,7 @@ class Galvanize():
                 "request": "command",
                 "data": base64.b64encode(m)
             }
-            self.sendMessage(msg, self.adaptor)
+            self.sendMessage(msg, self.lprsID)
         #except Exception as ex:
         #    self.cbLog("warning", "Problem formatting message. Exception: " + str(type(ex)) + ", " + str(ex.args))
         self.manageSend(1, msg)
@@ -437,7 +437,7 @@ class App(CbApp):
     def onAdaptorData(self, message):
         #self.cbLog("debug", "onAdaptorData, message: " + str(message))
         if message["characteristic"] == "galvanize_button":
-            self.galvanize.decodeRadioMessage(message["characteristic"])
+            self.galvanize.onRadioMessage(base64.b64decode(message["data"]))
         if message["characteristic"] == "buttons":
             self.galvanize.onButtonPress(message["data"]["leftButton"], message["timeStamp"])
 
