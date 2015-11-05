@@ -179,49 +179,24 @@ class Galvanize():
         self.cbLog("debug", "onIncludeGrant, nodeID: " + str(self.nodeAddress) + ", addr: " + str(addr))
 
     def onConfig(self, data):
-        configiType = struct.unpack("B", data[0])
+        configType = struct.unpack("B", data[0])[0]
+        self.cbLog("debug", "configType: " + str(hex(configType)))
         if configType < 0x44:
-            length = struct.unpack("B", data[1])
-            if configType == 0x11:
-                self.displayMessage[m1[0]] = data[2:]
-            elif configType == 0x12:
-                self.displayMessage[m1[1]] = data[2:]
-            elif configType == 0x12:
-                self.displayMessage[m1[2]] = data[2:]
-            elif configType == 0x21:
-                self.displayMessage[m2[0]] = data[2:]
-            elif configType == 0x22:
-                self.displayMessage[m2[1]] = data[2:]
-            elif configType == 0x22:
-                self.displayMessage[m2[2]] = data[2:]
-            elif configType == 0x31:
-                self.displayMessage[m3[0]] = data[2:]
-            elif configType == 0x32:
-                self.displayMessage[m3[1]] = data[2:]
-            elif configType == 0x32:
-                self.displayMessage[m3[2]] = data[2:]
-            elif configType == 0x41:
-                self.displayMessage[m4[0]] = data[2:]
-            elif configType == 0x42:
-                self.displayMessage[m4[1]] = data[2:]
-            elif configType == 0x42:
-                self.displayMessage[m4[2]] = data[2:]
+            length = struct.unpack("B", data[1])[0]
+            self.cbLog("debug", "config length: " + str(length))
+            m = "m" + str((configType & 0xF0) >> 4)
+            l = (configType & 0x0f) - 1
+            self.cbLog("debug", "m: " + m + ", l: " + str(l))
+            self.displayMessage[m][l] = str(data[2:length+2])
+            self.cbLog("debug", "new m1: " + str(self.displayMessage["m1"]))
         elif configType & 0xF0 == 0xF0:
+            m = "m" + str(configType & 0x0F)
             info = struct.unpack("B", data[1])
             font = FONT_INDEX[(info & 0xF0) >> 4]
             numLines = info & 0x0F
-            if configType == 0xF1:
-                self.displayFonts[m1] = font
-                self.numberLines[m1] = numLines
-            elif configType == 0xF2:
-                self.displayFonts[m2] = font
-                self.numberLines[m2] = numLines
-            elif configType == 0xF3:
-                self.displayFonts[m3] = font
-                self.numberLines[m3] = numLines
-            elif configType == 0xF4:
-                self.displayFonts[m4] = font
-                self.numberLines[m4] = numLines
+            self.cbLog("debug", "m: " + m + ", font: " + str(font) + ", numLines: " + str(numLines))
+            self.displayFonts[m] = font
+            self.displayLines[m] = numLines
         elif configType & 0xF0 == 0xB0:
             self.revertMessage = struct.unpack("B", data[1]) & 1
         elif configType & 0xF0 == 0xD0:
@@ -263,7 +238,6 @@ class Galvanize():
         #    self.setDisplay("initial")
         #    self.starting = False
         if self.radioOn:
-            self.cbLog("debug", "decodeRadioMessage: " + str(message))
             destination = struct.unpack(">H", message[0:2])[0]
             self.cbLog("debug", "Rx: destination: " + str("{0:#0{1}X}".format(destination,6)))
             if destination == self.nodeAddress or destination == BEACON_ADDRESS or destination == GRANT_ADDRESS:
@@ -325,13 +299,13 @@ class Galvanize():
             length = 6
             if data:
                 length += len(data)
-                #self.cbLog("debug", "data length: " + str(length))
+                self.cbLog("debug", "data length: " + str(length))
             m = ""
             m += struct.pack(">H", self.bridgeAddress)
             m += struct.pack(">H", self.nodeAddress)
             m+= struct.pack("B", FUNCTIONS[function])
             m+= struct.pack("B", length)
-            #self.cbLog("debug", "length: " +  str(length))
+            self.cbLog("debug", "length: " +  str(length))
             if data:
                 m += data
             hexPayload = m.encode("hex")
