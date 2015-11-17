@@ -18,20 +18,21 @@ BEACON_ADDRESS      = 0xBBBB
 GRANT_ADDRESS       = 0xBB00
 NODE_ID = 47
 FUNCTIONS = {
-    "beacon": 0xBE,
-    "woken_up": 0xAA,
-    "ack": 0xAC,
     "include_req": 0x00,
+    "s_include_req": 0x01,
     "include_grant": 0x02,
+    "reinclude": 0x04,
     "config": 0x05,
-    "send_battery": 0x07,
-    "alert": 0xAE,
-    "battery_status": 0xBA
+    "send_battery": 0x06,
+    "alert": 0x09,
+    "woken_up": 0x07,
+    "ack": 0x08,
+    "beacon": 0x0A
 }
 ALERTS = {
     "pressed": struct.pack(">H", 0x0000),
-    "user_cleared": struct.pack(">H", 0x0100),
-    "service_cleared": struct.pack(">H", 0x0200)
+    "cleared": struct.pack(">H", 0x0100),
+    "battery": struct.pack(">H", 0x0200)
 }
 FONT_INDEX = {
     1: "small",
@@ -144,7 +145,7 @@ class Galvanize():
                 self.sendRadio("alert", ALERTS["pressed"])
             elif self.nodeState == "pressed":
                 if pressedTime > 3:
-                    self.sendRadio("alert", ALERTS["service_cleared"])
+                    self.sendRadio("alert", ALERTS["cleared"])
                     if self.revertMessage:
                         self.nodeState = "reverting"
                         self.setDisplay("m3")
@@ -175,7 +176,7 @@ class Galvanize():
         self.sendRadio("battery_status", struct.pack(">H", 100))
 
     def onIncludeGrant(self, data):
-        addr, self.nodeAddress = struct.unpack("IH", data)
+        addr, self.nodeAddress = struct.unpack(">IH", data)
         self.cbLog("debug", "onIncludeGrant, nodeID: " + str(self.nodeAddress) + ", addr: " + str(addr))
 
     def onConfig(self, data):
@@ -237,9 +238,10 @@ class Galvanize():
         #if self.starting:
         #    self.setDisplay("initial")
         #    self.starting = False
+        destination = struct.unpack(">H", message[0:2])[0]
+        self.cbLog("debug", "Received. Rx: destination: " + str("{0:#0{1}X}".format(destination,6)) + ", radioOn: " + str(self.radioOn))
         if self.radioOn:
             destination = struct.unpack(">H", message[0:2])[0]
-            self.cbLog("debug", "Rx: destination: " + str("{0:#0{1}X}".format(destination,6)))
             if destination == self.nodeAddress or destination == BEACON_ADDRESS or destination == GRANT_ADDRESS:
                 source, hexFunction, length = struct.unpack(">HBB", message[2:6])
                 function = (key for key,value in FUNCTIONS.items() if value==hexFunction).next()
