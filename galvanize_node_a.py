@@ -16,7 +16,9 @@ from twisted.internet import reactor
 
 BEACON_ADDRESS      = 0xBBBB
 GRANT_ADDRESS       = 0xBB00
-NODE_ID = 47
+NODE_ID             = 47
+SLOT_TIME           = 80        # The length of a data sending slot
+MAX_SLOTS           = 36        # The number of slots in a frame
 FUNCTIONS = {
     "include_req": 0x00,
     "s_include_req": 0x01,
@@ -46,10 +48,6 @@ DISPLAY_INDEX = {
     4: "m4"
 }
 INTERVALS = {
-    "ts1": 3,
-    "ts2": 6,
-    "ts3": 4,
-    "ts4": 8,
     "ts5": 30,
     "tr1": 360,
     "tr2": 3600,
@@ -57,17 +55,17 @@ INTERVALS = {
     "t_reset_press": 8,
     "t_start_press": 3,
     "t_search_max": 30,
-    "t_keep_awake": 5
+    "t_keep_awake": 20 
 }
 
 class Galvanize():
     def __init__(self):
         self.displayMessage = {
-            "m1": ["Press to call for service", "", ""],
+            "m1": ["Push here", "to call for service", ""],
             "m2": ["Your request has been sent", "", ""],
             "m3": ["Cancelling request", "", ""],
             "m4": ["", "", ""],
-            "initial": ["Press button for", "3 seconds to connect", "to network"],
+            "initial": ["Push here for", "3 seconds to connect", "to network"],
             "search": ["Searching for network", "", ""],
             "search_failed": ["No network found", "Press to continue", ""],
             "connecting": ["Trying to connect to network", "Please wait", ""],
@@ -87,7 +85,7 @@ class Galvanize():
             "commsFailed": "medium"
         }
         self.numberLines = {
-            "m1": 1,
+            "m1": 2,
             "m2": 1,
             "m3": 1,
             "m4": 0,
@@ -98,6 +96,8 @@ class Galvanize():
             "commsProblem": 2,
             "commsFailed": 2
         }
+        self.radioQueue             = []
+        self.beaconDelay            = 32*0.08
         self.buttonPressTime        = 0
         self.currentDisplay         = "m1"
         self.nodeState              = "initial"
@@ -106,22 +106,17 @@ class Galvanize():
         self.lprsID                 = None
         self.revertMessage          = True
         self.radioOn                = False
-        self.sending                = False
-        self.starting               = True
 
     def setDisplay(self, index):
-        text = self.displayMessage[index][0]
+        self.cbLog("info", "Display: -----------------------------------")
+        self.cbLog("info", "Display: " + self.displayMessage[index][0])
         if self.numberLines[index] > 1:
-            text += "\n" + self.displayMessage[index][1]
+            self.cbLog("info", "Display: " + self.displayMessage[index][1])
         if self.numberLines[index] > 2:
-            text += "\n" + self.displayMessage[index][2]
-        msg = {
-            "id": self.id,
-            "status": "user_message",
-            "body": "Display: " + text
-        }
-        self.sendManagerMessage(msg)
-        self.cbLog("info", "Display: " + text + ", font: " + self.displayFonts[index])
+            self.cbLog("info", "Display: " + self.displayMessage[index][2])
+        self.cbLog("info", "Display: -----------------------------------")
+        self.cbLog("info", "Display font: " + self.displayFonts[index])
+        self.cbLog("info", "Display: -----------------------------------")
 
     def onButtonPress(self, buttonState, timeStamp):
         if buttonState == 1:
@@ -177,7 +172,8 @@ class Galvanize():
 
     def onIncludeGrant(self, data):
         addr, self.nodeAddress = struct.unpack(">IH", data)
-        self.cbLog("debug", "onIncludeGrant, nodeID: " + str(self.nodeAddress) + ", addr: " + str(addr))
+        INTERVALS["tWait"] = (self.nodeAddress & 0x1F) * 0.08
+        self.cbLog("debug", "onIncludeGrant, nodeID: " + str(self.nodeAddress) + ", addr: " + str(addr) + ", tWait: " + str(INTERVALS["tWait"]))
 
     def onConfig(self, data):
         configType = struct.unpack("B", data[0])[0]
@@ -206,6 +202,10 @@ class Galvanize():
         else:
             self.cbLog ("info", "Unrecognised config type: " + str(hex(configType)))
 
+    def switchRadio(self, state):
+        self.radioOn = state
+        self.cbLog("debug", "radioOn: " + str(self.radioOn))
+
     def wakeup(self, disconnected=False):
         try:
             self.wakeupID.cancel()
@@ -214,8 +214,7 @@ class Galvanize():
         self.sendRadio("woken_up")
 
     def goToSleep(self):
-        self.radioOn = False
-        self.cbLog("debug", "radio off")
+        self.switchRadio(False)
 
     def setWakeup(self, wakeup):
         try:
@@ -224,22 +223,14 @@ class Galvanize():
             self.cbLog("debug", "setWakeup. Nothing to cancel")
         if wakeup == 0:
             self.wakeupID = reactor.callLater(INTERVALS["t_keep_awake"], self.goToSleep)
+            self.cbLog("debug", "setWakeup, staying awake for " + str(INTERVALS["t_keep_awake"]) + " seconds")
         else:
             self.wakeupID = reactor.callLater(wakeup*2, self.wakeup)
-
-    def reconnect(self):
-        self.radioOn = True
-        self.cbLog("debug", "radio on")
-        self.setDisplay("commsFailed")
-        self.nodeState = "search"
-        self.wakeupID = reactor.callLater(INTERVALS["tr2"], self.reconnect)
+            self.cbLog("debug", "setWakeup, sleeping for " + str(wakeup*2) + " seconds")
 
     def onRadioMessage(self, message):
-        #if self.starting:
-        #    self.setDisplay("initial")
-        #    self.starting = False
-        destination = struct.unpack(">H", message[0:2])[0]
-        self.cbLog("debug", "Received. Rx: destination: " + str("{0:#0{1}X}".format(destination,6)) + ", radioOn: " + str(self.radioOn))
+        #destination = struct.unpack(">H", message[0:2])[0]
+        #self.cbLog("debug", "Received. Rx: destination: " + str("{0:#0{1}x}".format(destination,6)) + ", radioOn: " + str(self.radioOn))
         if self.radioOn:
             destination = struct.unpack(">H", message[0:2])[0]
             if destination == self.nodeAddress or destination == BEACON_ADDRESS or destination == GRANT_ADDRESS:
@@ -247,22 +238,21 @@ class Galvanize():
                 function = (key for key,value in FUNCTIONS.items() if value==hexFunction).next()
                 #hexMessage = message.encode("hex")
                 #self.cbLog("debug", "hex message after decode: " + str(hexMessage))
-                self.cbLog("debug", "source: " + str("{0:#0{1}X}".format(source,6)))
-                self.cbLog("debug", "Rx: function: " + function)
-                self.cbLog("debug", "Rx: length: " + str(length))
+                self.cbLog("debug", "onRadioMessage, source: " + str("{0:#0{1}x}".format(source,6)) + ", function: " + function)
+                #self.cbLog("debug", "Rx: length: " + str(length))
                 if length > 6:
-                    wakeup = struct.unpack(">H", message[5:7])[0]
-                    #reactor.callFromThread(self.cbLog, "debug", "wakeup: " + str(wakeup))
+                    wakeup = struct.unpack(">H", message[6:8])[0]
+                    reactor.callFromThread(self.cbLog, "debug", "wakeup: " + str(wakeup))
                 else:
                     wakeup = 0
                 if length > 8:
-                    payload = message[8:]
+                    payload = message[8:length+1]
+                    self.cbLog("debug", "Rx: payload: " + str(payload.encode("hex")) + ", length: " + str(len(payload)))
                 else:
                     payload = ""
-                hexPayload = payload.encode("hex")
-                self.cbLog("debug", "Rx: payload: " + str(hexPayload) + ", length: " + str(len(payload)))
     
                 if function == "beacon":
+                    self.manageSend()
                     if self.nodeState == "search":
                         self.bridgeAddress = source 
                         self.nodeState = "include_req"
@@ -271,13 +261,11 @@ class Galvanize():
                 elif function == "include_grant":
                     self.nodeState = "normal"
                     self.setDisplay("m1")
-                    self.sendRadio("ack")
                     self.onIncludeGrant(payload)
-                    self.acknowledged()
+                    self.sendRadio("ack")
                 elif function == "config":
                     self.onConfig(payload)
                     self.sendRadio("ack")
-                    self.acknowledged()
                 elif function == "send_battery":
                     self.sendBattery
                 elif function == "ack":
@@ -293,9 +281,6 @@ class Galvanize():
             self.setDisplay("search_failed")
 
     def sendRadio(self, function, data = None):
-        if self.sending:
-            self.cbLog("warning", "Could not send " + function + " message because another message is being sent")
-            return
         if True:
         #try:
             length = 6
@@ -317,54 +302,65 @@ class Galvanize():
                 "request": "command",
                 "data": base64.b64encode(m)
             }
-            self.sendMessage(msg, self.lprsID)
+            self.queueRadio(msg, function)
         #except Exception as ex:
         #    self.cbLog("warning", "Problem formatting message. Exception: " + str(type(ex)) + ", " + str(ex.args))
-        self.manageSend(1, msg)
 
-    def waitTime(self, a, b):
-        r =  float(random.randint(a*10, b*10))/10
+    def randomWait(self):
+        r =  float(random.randint(0, MAX_SLOTS*SLOT_TIME))/1000
         self.cbLog("debug", "waitTime: " + str(r))
         return r
 
-    def manageSend(self, attempt, msg=None):
-        self.cbLog("info", "manageSend, attempt: " + str(attempt) + ", sending: " + str(self.sending))
-        if attempt ==1:
-            self.sending = True
-            self.beingSent = msg
-            self.radioOn = True
-            self.cbLog("debug", "radio on")
-            self.sendMessage(self.beingSent, self.lprsID)
-            self.cbLog ("debug", "Sending: " + str(self.beingSent))
-            waitTime = self.waitTime(INTERVALS["ts1"], INTERVALS["ts2"])
-            self.waitingID = reactor.callLater(waitTime, self.manageSend, 2)
-        elif attempt == 2 and self.sending:
-            self.sendMessage(self.beingSent, self.lprsID)
-            waitTime = self.waitTime(INTERVALS["ts3"], INTERVALS["ts4"])
-            self.waitingID = reactor.callLater(waitTime, self.manageSend, 3)
-        elif attempt == 3 and self.sending:
-            self.nodeState = "commsProblem"
-            self.waitingID = reactor.callLater(INTERVALS["ts5"], self.manageSend, 4)
-        elif attempt ==4 and self.sending:
-            self.sendMessage(self.beingSent, self.lprsID)
-            waitTime = self.waitTime(INTERVALS["ts1"], INTERVALS["ts2"])
-            self.waitingID = reactor.callLater(waitTime, self.manageSend, 5)
-        elif attempt == 5 and self.sending:
-            self.sendMessage(self.beingSent, self.lprsID)
-            waitTime = self.waitTime(INTERVALS["ts3"], INTERVALS["ts4"])
-            self.waitingID = reactor.callLater(waitTime, self.manageSend, 6)
-        elif attempt == 6 and self.sending:
-            self.setDisplay("commsProblem")
-            self.radioOn = False
-            self.cbLog("debug", "radio off")
-            self.wakeupID = reactor.callLater(INTERVALS["tr1"], self.reconnect)
+    def queueRadio(self, msg, function):
+        toQueue = {
+            "message": msg,
+            "function": function,
+            "attempt": 0
+        }
+        self.radioQueue.append(toQueue)
+        self.switchRadio(True)
+
+    def manageSend(self):
+        if self.radioQueue:
+            self.cbLog("debug", "manageSend, radioQueue: " + str(json.dumps(self.radioQueue, indent=4)))
+            if self.radioQueue[0]["attempt"] == 0:
+                reactor.callLater(self.beaconDelay, self.delayedSend)
+                self.radioQueue[0]["attempt"] += 1
+            elif self.radioQueue[0]["attempt"] == 1:
+                reactor.callLater(self.randomWait(), self.delayedSend)
+                self.radioQueue[0]["attempt"] += 1
+            elif self.radioQueue[0]["attempt"] == 2:
+                reactor.callLater(self.randomWait(), self.delayedSend)
+                self.radioQueue[0]["attempt"] += 1
+            elif self.radioQueue[0]["attempt"] > 2 and self.radioQueue[0]["attempt"] < 9:
+                self.radioQueue[0]["attempt"] += 1 
+            elif self.radioQueue[0]["attempt"] == 9:
+                reactor.callLater(self.beaconDelay, self.delayedSend)
+                self.radioQueue[0]["attempt"] += 1
+            elif self.radioQueue[0]["attempt"] == 10:
+                reactor.callLater(self.randomWait(), self.delayedSend)
+                self.radioQueue[0]["attempt"] += 1
+            elif self.radioQueue[0]["attempt"] == 11:
+                reactor.callLater(self.randomWait(), self.delayedSend)
+                self.radioQueue[0]["attempt"] += 1
+            elif self.radioQueue[0]["attempt"] == 12:
+                reactor.callLater(self.randomWait(), self.delayedSend)
+                self.radioQueue = []
+                reactor.callLater(self.goToSleep, self.delayedSend)
+                self.setDisplay("commsProblem")
+
+    def delayedSend(self):
+        self.sendMessage(self.radioQueue[0]["message"], self.lprsID)
+        if self.radioQueue[0]["function"] == "include_req" or self.radioQueue[0]["function"] == "ack":
+            del(self.radioQueue[0])
 
     def acknowledged(self):
         try:
-            self.waitingID.cancel()
+            del(self.radioQueue[0])
         except:
-            self.cbLog("debug", "acknowledged, nothing to cancel")
-        self.sending = False
+            self.cbLog("debug", "acknowledged, nothing to delete from radioQueue")
+        if not self.radioQueue:
+            self.switchRadio(False)
 
 class App(CbApp):
     def __init__(self, argv):
@@ -414,7 +410,7 @@ class App(CbApp):
         #self.cbLog("debug", "onAdaptorData, message: " + str(message))
         if message["characteristic"] == "galvanize_button":
             self.galvanize.onRadioMessage(base64.b64decode(message["data"]))
-        if message["characteristic"] == "buttons":
+        elif message["characteristic"] == "buttons":
             self.galvanize.onButtonPress(message["data"]["leftButton"], message["timeStamp"])
 
     def onConfigureMessage(self, managerConfig):
@@ -423,6 +419,7 @@ class App(CbApp):
         self.galvanize.id = self.id
         self.galvanize.sendMessage = self.sendMessage
         self.galvanize.sendManagerMessage = self.sendManagerMessage
+        self.galvanize.setDisplay("initial")
         self.setState("starting")
 
 if __name__ == '__main__':
