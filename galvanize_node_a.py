@@ -47,19 +47,20 @@ DISPLAY_INDEX = {
     3: "m3",
     4: "m4"
 }
-INTERVALS = {
-    "ts5": 30,
-    "tr1": 360,
-    "tr2": 3600,
-    "t_long_press": 3,
-    "t_reset_press": 8,
-    "t_start_press": 3,
-    "t_search_max": 30,
-    "t_keep_awake": 20 
-}
 
 class Galvanize():
     def __init__(self):
+        self.intervals = {
+            "ts5": 30,
+            "tr1": 360,
+            "tr2": 3600,
+            "t_long_press": 3,
+            "t_reset_press": 8,
+            "t_start_press": 3,
+            "t_search_max": 30,
+            "t_keep_awake": 20,
+            "t_sleep": 60
+        }
         self.displayMessage = {
             "m1": ["Push here", "to call for service", ""],
             "m2": ["Your request has been sent", "", ""],
@@ -123,16 +124,16 @@ class Galvanize():
             self.buttonPressTime = timeStamp
         elif buttonState == 0:
             pressedTime = timeStamp - self.buttonPressTime 
-            if pressedTime > INTERVALS["t_reset_press"]:
+            if pressedTime > self.intervals["t_reset_press"]:
                 self.nodeState = "initial"
                 self.setDisplay("initial")
             elif self.nodeState == "initial":
-                if pressedTime > INTERVALS["t_start_press"]:
+                if pressedTime > self.intervals["t_start_press"]:
                     self.nodeState = "search"
                     self.setDisplay("search")
-                    self.radioOn = True
+                    self.switchRadio(True)
                     self.cbLog("debug", "radio on")
-                    self.searchID = reactor.callLater(INTERVALS["t_search_max"], self.searchTimeout)
+                    self.searchID = reactor.callLater(self.intervals["t_search_max"], self.searchTimeout)
             elif self.nodeState == "normal":
                 self.nodeState = "clearable"
                 self.nodeState = "pressed"
@@ -149,8 +150,7 @@ class Galvanize():
                         self.nodeState = "normal"
                         self.setDisplay("m1")
             elif self.nodeState == "reverting":
-                self.nodeState = "normal"
-                self.setDisplay("m1")
+                pass  # This state exited by delayed endRevert function
             elif self.nodeState == "search":
                 pass  # Only get out of this state by finding network or long press or timeout
             elif self.nodeState == "search_failed":
@@ -172,8 +172,8 @@ class Galvanize():
 
     def onIncludeGrant(self, data):
         addr, self.nodeAddress = struct.unpack(">IH", data)
-        INTERVALS["tWait"] = (self.nodeAddress & 0x1F) * 0.08
-        self.cbLog("debug", "onIncludeGrant, nodeID: " + str(self.nodeAddress) + ", addr: " + str(addr) + ", tWait: " + str(INTERVALS["tWait"]))
+        self.intervals["tWait"] = (self.nodeAddress & 0x1F) * 0.08
+        self.cbLog("debug", "onIncludeGrant, nodeID: " + str(self.nodeAddress) + ", addr: " + str(addr) + ", tWait: " + str(self.intervals["tWait"]))
 
     def onConfig(self, data):
         configType = struct.unpack("B", data[0])[0]
@@ -183,17 +183,16 @@ class Galvanize():
             self.cbLog("debug", "config length: " + str(length))
             m = "m" + str((configType & 0xF0) >> 4)
             l = (configType & 0x0f) - 1
-            self.cbLog("debug", "m: " + m + ", l: " + str(l))
             self.displayMessage[m][l] = str(data[2:length+2])
-            self.cbLog("debug", "new m1: " + str(self.displayMessage["m1"]))
+            self.cbLog("debug", "new message, m: " + str(m) + ", l: " + str(l) + ", line: " + str(self.displayMessage[m][l]))
         elif configType & 0xF0 == 0xF0:
             m = "m" + str(configType & 0x0F)
-            info = struct.unpack("B", data[1])
+            info = struct.unpack("B", data[1])[0]
             font = FONT_INDEX[(info & 0xF0) >> 4]
             numLines = info & 0x0F
             self.cbLog("debug", "m: " + m + ", font: " + str(font) + ", numLines: " + str(numLines))
             self.displayFonts[m] = font
-            self.displayLines[m] = numLines
+            self.numberLines[m] = numLines
         elif configType & 0xF0 == 0xB0:
             self.revertMessage = struct.unpack("B", data[1]) & 1
         elif configType & 0xF0 == 0xD0:
@@ -203,7 +202,11 @@ class Galvanize():
             self.cbLog ("info", "Unrecognised config type: " + str(hex(configType)))
 
     def switchRadio(self, state):
-        self.radioOn = state
+        if state == False:
+            if not self.radioQueue:
+                self.radioOn = False
+        else:
+            self.radioOn = True
         self.cbLog("debug", "radioOn: " + str(self.radioOn))
 
     def wakeup(self, disconnected=False):
@@ -215,6 +218,8 @@ class Galvanize():
 
     def goToSleep(self):
         self.switchRadio(False)
+        self.wakeupID = reactor.callLater(self.intervals["t_sleep"], self.wakeup)
+        self.cbLog("debug", "setWakeup, sleeping for " + str(self.intervals["t_sleep"]) + " seconds")
 
     def setWakeup(self, wakeup):
         try:
@@ -222,11 +227,11 @@ class Galvanize():
         except:
             self.cbLog("debug", "setWakeup. Nothing to cancel")
         if wakeup == 0:
-            self.wakeupID = reactor.callLater(INTERVALS["t_keep_awake"], self.goToSleep)
-            self.cbLog("debug", "setWakeup, staying awake for " + str(INTERVALS["t_keep_awake"]) + " seconds")
+            self.wakeupID = reactor.callLater(self.intervals["t_keep_awake"], self.goToSleep)
+            self.cbLog("debug", "setWakeup, staying awake for " + str(self.intervals["t_keep_awake"]) + " seconds")
         else:
-            self.wakeupID = reactor.callLater(wakeup*2, self.wakeup)
-            self.cbLog("debug", "setWakeup, sleeping for " + str(wakeup*2) + " seconds")
+            self.intervals["t_sleep"] = wakeup*2
+            self.goToSleep()
 
     def onRadioMessage(self, message):
         #destination = struct.unpack(">H", message[0:2])[0]
@@ -317,8 +322,12 @@ class Galvanize():
             "function": function,
             "attempt": 0
         }
-        self.radioQueue.append(toQueue)
+        if function == "ack":
+            self.radioQueue.insert(0, toQueue)
+        else:
+            self.radioQueue.append(toQueue)
         self.switchRadio(True)
+        self.cbLog("debug", "queueRadio, toQueue: " + str(toQueue["function"]))
 
     def manageSend(self):
         if self.radioQueue:
@@ -351,16 +360,15 @@ class Galvanize():
 
     def delayedSend(self):
         self.sendMessage(self.radioQueue[0]["message"], self.lprsID)
+        # include_req & ack are only sent once, so delete them from the queue as soon as they are sent
         if self.radioQueue[0]["function"] == "include_req" or self.radioQueue[0]["function"] == "ack":
             del(self.radioQueue[0])
 
     def acknowledged(self):
         try:
-            del(self.radioQueue[0])
+            del(self.radioQueue[0])  # Delete the message at the front of the queue
         except:
             self.cbLog("debug", "acknowledged, nothing to delete from radioQueue")
-        if not self.radioQueue:
-            self.switchRadio(False)
 
 class App(CbApp):
     def __init__(self, argv):
