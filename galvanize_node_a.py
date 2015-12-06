@@ -58,6 +58,8 @@ class Galvanize():
             "t_reset_press": 8,
             "t_start_press": 3,
             "t_search_max": 30,
+            "t_short_search_wait": 600,
+            "t_long_search_wait": 3600,
             "t_keep_awake": 20,
             "t_sleep": 60
         }
@@ -68,10 +70,8 @@ class Galvanize():
             "m4": ["", "", ""],
             "initial": ["Push here for", "3 seconds to connect", "to network"],
             "search": ["Searching for network", "", ""],
-            "search_failed": ["No network found", "Press to continue", ""],
             "connecting": ["Trying to connect to network", "Please wait", ""],
-            "commsProblem": ["Communication problem", "Temporarily not in use", ""],
-            "commsFailed": ["Communication problem", "Button not in use", ""]
+            "commsProblem": ["Communication problem", "Button not in use", ""]
         }
         self.displayFonts = {
             "m1": "medium",
@@ -80,10 +80,8 @@ class Galvanize():
             "m4": "small",
             "initial": "medium",
             "search": "medium",
-            "search_failed": "medium",
             "connecting": "medium",
-            "commsProblem": "medium",
-            "commsFailed": "medium"
+            "commsProblem": "medium"
         }
         self.numberLines = {
             "m1": 2,
@@ -92,17 +90,15 @@ class Galvanize():
             "m4": 0,
             "initial": 3,
             "search": 1,
-            "search_failed": 2,
             "connecting": 2,
-            "commsProblem": 2,
-            "commsFailed": 2
+            "commsProblem": 2
         }
         self.radioQueue             = []
         self.beaconDelay            = 32*0.08
         self.buttonPressTime        = 0
         self.currentDisplay         = "m1"
         self.nodeState              = "initial"
-        self.nodeAddress                 = 0xFFFF
+        self.nodeAddress            = 0xFFFF
         self.bridgeAddress          = None
         self.lprsID                 = None
         self.revertMessage          = True
@@ -132,8 +128,6 @@ class Galvanize():
                     self.nodeState = "search"
                     self.setDisplay("search")
                     self.switchRadio(True)
-                    self.cbLog("debug", "radio on")
-                    self.searchID = reactor.callLater(self.intervals["t_search_max"], self.searchTimeout)
             elif self.nodeState == "normal":
                 self.nodeState = "clearable"
                 self.nodeState = "pressed"
@@ -153,19 +147,76 @@ class Galvanize():
                 pass  # This state exited by delayed endRevert function
             elif self.nodeState == "search":
                 pass  # Only get out of this state by finding network or long press or timeout
-            elif self.nodeState == "search_failed":
-                self.nodeState = "initial"
-                self.setDisplay("initial")
-            elif self.nodeState == "comms_failed":
-                pass
             else:
                 self.cbLog("warning", "State machine in unknown state: " + self.nodeState)
-        self.cbLog("debug", "onButtonPress, end state: " + self.nodeState)
+            self.cbLog("debug", "onButtonPress, end state: " + self.nodeState)
 
     def endRevert(self):
         if self.nodeState != "normal":
             self.nodeState = "normal"
             self.setDisplay("m1")
+
+    def searchTimeout(self, attempt):
+        """
+        Implements most of the beacon search process state machine
+        This function is called with attempt=0 if a beacon message has not been found after 30s of searching.
+        It then goes through a process of searching again after 10 mins and then after every hour. 
+        This goes on forever until a beacon is found or the node is reset.
+        Note that self.searchID is cancelled if a message is received & hence this function is not called.
+        """
+        if attempt == 0:
+            self.radioOn = False
+            self.setDisplay("commsProblem")
+            self.nodeState = "search":
+            self.searchID = reactor.callLater(self.intervals["t_short_search_wait"], self.searchTimeout, 1)
+        elif attempt == 1:
+            self.radioOn = True
+            self.searchID = reactor.callLater(self.intervals["t_search_max"], self.searchTimeout, 2)
+        elif attempt == 2:
+            self.radioOn = False
+            self.searchID = reactor.callLater(self.intervals["t_long_search_wait"], self.searchTimeout, 3)
+        elif attempt == 3
+            self.radioOn = True
+            self.searchID = reactor.callLater(self.intervals["t_search_max"], self.searchTimeout, 2)
+
+    def switchRadio(self, state):
+        try:
+            self.searchID.cancel()  # Stops search timeout when we switch radion on or off
+        except Exception as ex:
+            self.cbLog("debug", "No searchID to cancel. Exception: " + str(type(ex)) + ", " + str(ex.args))
+        if state == False:
+            if not self.radioQueue:
+                self.radioOn = False
+        else:
+            self.radioOn = True
+            # As soon as radio is switched on searchTimeout is called for t_search_max later.
+            # self.searchID is cancelled when a message is received. Hence searchTimeout will not be called.
+            self.searchID = reactor.callLater(self.intervals["t_search_max"], self.searchTimeout, 0)
+        self.cbLog("debug", "radioOn: " + str(self.radioOn))
+
+    def wakeup(self, disconnected=False):
+        try:
+            self.wakeupID.cancel()
+        except: 
+            self.cbLog("debug", "wakeup called at end of normal time")
+        self.sendRadio("woken_up")
+
+    def goToSleep(self):
+        self.switchRadio(False)
+        self.wakeupID = reactor.callLater(self.intervals["t_sleep"], self.wakeup)
+        self.cbLog("debug", "setWakeup, sleeping for " + str(self.intervals["t_sleep"]) + " seconds")
+
+    def setWakeup(self, wakeup):
+        try:
+            self.wakeupID.cancel()
+        except:
+            self.cbLog("debug", "setWakeup. Nothing to cancel")
+        if wakeup == 0:
+            self.wakeupID = reactor.callLater(self.intervals["t_keep_awake"], self.goToSleep)
+            self.cbLog("debug", "setWakeup, staying awake for " + str(self.intervals["t_keep_awake"]) + " seconds")
+        else:
+            self.intervals["t_sleep"] = wakeup*2
+            self.goToSleep()
 
     def sendBattery(self):
         self.sendRadio("battery_status", struct.pack(">H", 100))
@@ -201,50 +252,17 @@ class Galvanize():
         else:
             self.cbLog ("info", "Unrecognised config type: " + str(hex(configType)))
 
-    def switchRadio(self, state):
-        if state == False:
-            if not self.radioQueue:
-                self.radioOn = False
-        else:
-            self.radioOn = True
-        self.cbLog("debug", "radioOn: " + str(self.radioOn))
-
-    def wakeup(self, disconnected=False):
-        try:
-            self.wakeupID.cancel()
-        except: 
-            self.cbLog("debug", "wakeup called at end of normal time")
-        self.sendRadio("woken_up")
-
-    def goToSleep(self):
-        self.switchRadio(False)
-        self.wakeupID = reactor.callLater(self.intervals["t_sleep"], self.wakeup)
-        self.cbLog("debug", "setWakeup, sleeping for " + str(self.intervals["t_sleep"]) + " seconds")
-
-    def setWakeup(self, wakeup):
-        try:
-            self.wakeupID.cancel()
-        except:
-            self.cbLog("debug", "setWakeup. Nothing to cancel")
-        if wakeup == 0:
-            self.wakeupID = reactor.callLater(self.intervals["t_keep_awake"], self.goToSleep)
-            self.cbLog("debug", "setWakeup, staying awake for " + str(self.intervals["t_keep_awake"]) + " seconds")
-        else:
-            self.intervals["t_sleep"] = wakeup*2
-            self.goToSleep()
-
     def onRadioMessage(self, message):
-        #destination = struct.unpack(">H", message[0:2])[0]
-        #self.cbLog("debug", "Received. Rx: destination: " + str("{0:#0{1}x}".format(destination,6)) + ", radioOn: " + str(self.radioOn))
         if self.radioOn:
             destination = struct.unpack(">H", message[0:2])[0]
             if destination == self.nodeAddress or destination == BEACON_ADDRESS or destination == GRANT_ADDRESS:
+                try:
+                    self.searchID.cancel()  # Stops 30 second search timeout when we receive a message
+                except Exception as ex:
+                    self.cbLog("debug", "No searchID to cancel. Exception: " + str(type(ex)) + ", " + str(ex.args))
                 source, hexFunction, length = struct.unpack(">HBB", message[2:6])
                 function = (key for key,value in FUNCTIONS.items() if value==hexFunction).next()
-                #hexMessage = message.encode("hex")
-                #self.cbLog("debug", "hex message after decode: " + str(hexMessage))
                 self.cbLog("debug", "onRadioMessage, source: " + str("{0:#0{1}x}".format(source,6)) + ", function: " + function)
-                #self.cbLog("debug", "Rx: length: " + str(length))
                 if length > 6:
                     wakeup = struct.unpack(">H", message[6:8])[0]
                     reactor.callFromThread(self.cbLog, "debug", "wakeup: " + str(wakeup))
@@ -255,7 +273,6 @@ class Galvanize():
                     self.cbLog("debug", "Rx: payload: " + str(payload.encode("hex")) + ", length: " + str(len(payload)))
                 else:
                     payload = ""
-    
                 if function == "beacon":
                     self.manageSend()
                     if self.nodeState == "search":
@@ -280,11 +297,6 @@ class Galvanize():
                 if function != "beacon":
                     self.setWakeup(wakeup)
     
-    def searchTimeout(self):
-        if self.nodeState == "search":
-            self.nodeState = "search_failed"
-            self.setDisplay("search_failed")
-
     def sendRadio(self, function, data = None):
         if True:
         #try:
