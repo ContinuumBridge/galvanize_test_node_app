@@ -2,6 +2,25 @@
 # galvanize_node_a.py
 """
 Copyright (c) 2015 ContinuumBridge Limited
+
+General notes for embedded implementation
+-----------------------------------------
+
+This code is written to run as an app on the ContinuumBridge cbridge platform. All the code
+in Class App can be ignored when it comes to translating this to an embedded implementation.
+This is just the means by which the app is connected to the LPRS radio and to the server
+application.
+
+Note that this code only implements the button node functions, not the sensor node, and in
+this version does not include encryption.
+
+The starting methods are onButtonPress and onRadioMessage, as nothing happens unless the
+button is pressed or a message arrives from the radio. Both of these methods call other
+methods, which are potentially delayed. Calls of the form:
+
+reactor.callLater(DELAY, METHOD)
+
+cause METHOD to be called after DELAY seconds.
 """
 
 import sys
@@ -58,8 +77,8 @@ class Galvanize():
             "t_reset_press": 8,
             "t_start_press": 3,
             "t_search_max": 30,
-            "t_short_search_wait": 600,
-            "t_long_search_wait": 3600,
+            "t_short_search_wait": 120,
+            "t_long_search_wait": 180,
             "t_keep_awake": 20,
             "t_sleep": 60
         }
@@ -164,10 +183,12 @@ class Galvanize():
         This goes on forever until a beacon is found or the node is reset.
         Note that self.searchID is cancelled if a message is received & hence this function is not called.
         """
+        self.cbLog("info", "searchTimeout, attempt: " + str(attempt))
         if attempt == 0:
             self.radioOn = False
             self.setDisplay("commsProblem")
-            self.nodeState = "search":
+            self.radioQueue = []  # Delete any messages in queue
+            self.nodeState = "search"
             self.searchID = reactor.callLater(self.intervals["t_short_search_wait"], self.searchTimeout, 1)
         elif attempt == 1:
             self.radioOn = True
@@ -175,15 +196,16 @@ class Galvanize():
         elif attempt == 2:
             self.radioOn = False
             self.searchID = reactor.callLater(self.intervals["t_long_search_wait"], self.searchTimeout, 3)
-        elif attempt == 3
+        elif attempt == 3:
             self.radioOn = True
             self.searchID = reactor.callLater(self.intervals["t_search_max"], self.searchTimeout, 2)
 
     def switchRadio(self, state):
         try:
-            self.searchID.cancel()  # Stops search timeout when we switch radion on or off
+            if self.searchID.cancelled == 0:
+                self.searchID.cancel()  # Stops search timeout when we switch radion on or off
         except Exception as ex:
-            self.cbLog("debug", "No searchID to cancel. Exception: " + str(type(ex)) + ", " + str(ex.args))
+            self.cbLog("debug", "switchRadio. No searchID to cancel. Exception: " + str(type(ex)) + ", " + str(ex.args))
         if state == False:
             if not self.radioQueue:
                 self.radioOn = False
@@ -257,9 +279,10 @@ class Galvanize():
             destination = struct.unpack(">H", message[0:2])[0]
             if destination == self.nodeAddress or destination == BEACON_ADDRESS or destination == GRANT_ADDRESS:
                 try:
-                    self.searchID.cancel()  # Stops 30 second search timeout when we receive a message
+                    if self.searchID.cancelled == 0:
+                        self.searchID.cancel()  # Stops 30 second search timeout when we receive a message
                 except Exception as ex:
-                    self.cbLog("debug", "No searchID to cancel. Exception: " + str(type(ex)) + ", " + str(ex.args))
+                    self.cbLog("debug", "onRadioMessage, No searchID to cancel. Exception: " + str(type(ex)) + ", " + str(ex.args))
                 source, hexFunction, length = struct.unpack(">HBB", message[2:6])
                 function = (key for key,value in FUNCTIONS.items() if value==hexFunction).next()
                 self.cbLog("debug", "onRadioMessage, source: " + str("{0:#0{1}x}".format(source,6)) + ", function: " + function)
